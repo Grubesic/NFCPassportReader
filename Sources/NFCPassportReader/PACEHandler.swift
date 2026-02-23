@@ -403,6 +403,7 @@ extension PACEHandler {
             // Error
             throw PACEHandlerError.DHKeyAgreementError( "Unable to get DH mapping key" )
         }
+        defer { DH_free(dh_mapping_key) }
         
         // Compute the shared secret using the mapping key and the passports public mapping key
         let bn = BN_bin2bn(passportPublicKeyData, Int32(passportPublicKeyData.count), nil)
@@ -440,6 +441,8 @@ extension PACEHandler {
         // bn_g = g^nonce mod p
         // ephemeral_key->g = bn_g mod p * h  => (g^nonce mod p) * h mod p
         let bn_ctx = BN_CTX_new()
+        defer { BN_CTX_free(bn_ctx) }
+        
         guard BN_mod_exp(bn_g, g, nonce, p, bn_ctx) == 1,
               BN_mod_mul(new_g, bn_g, bn_h, p, bn_ctx) == 1 else {
             // Error
@@ -472,6 +475,7 @@ extension PACEHandler {
     func doECDHMappingAgreement( mappingKey : OpaquePointer, passportPublicKeyData: [UInt8], nonce: OpaquePointer ) throws -> OpaquePointer {
 
         let ec_mapping_key = EVP_PKEY_get1_EC_KEY(mappingKey)
+        defer { EC_KEY_free(ec_mapping_key) }
         
         guard let group = EC_GROUP_dup(EC_KEY_get0_group(ec_mapping_key)) else {
             // Error
@@ -527,10 +531,12 @@ extension PACEHandler {
         defer{ EC_KEY_free(ephemeral_key) }
         
         // configure the new EC_KEY
-        guard EVP_PKEY_set1_EC_KEY(ephemeralParams, ephemeral_key) == 1,
-              EC_GROUP_set_generator(group, newGenerater, order, cofactor) == 1,
+        // Note: In OpenSSL 3.0 EVP_PKEY_set1_EC_KEY converts the key to a provider key
+        // so we must configure the EC_KEY fully BEFORE setting it to the EVP_PKEY
+        guard EC_GROUP_set_generator(group, newGenerater, order, cofactor) == 1,
               EC_GROUP_check(group, nil) == 1,
-              EC_KEY_set_group(ephemeral_key, group) == 1 else {
+              EC_KEY_set_group(ephemeral_key, group) == 1,
+              EVP_PKEY_set1_EC_KEY(ephemeralParams, ephemeral_key) == 1 else {
             // Error
 
             EVP_PKEY_free( ephemeralParams )
